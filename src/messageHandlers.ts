@@ -35,6 +35,41 @@ import { Message } from 'telegraf/types';
 // Temporary message buffer
 const messageBuffers = new Map<string, { messages: MyMessage[], timer: NodeJS.Timeout | null }>();
 
+// Axios request with timeout and retries
+const AXIOS_TIMEOUT_MS = 30000;
+const AXIOS_MAX_RETRIES = 3;
+
+async function axiosWithRetry(
+  url: string,
+  responseType: 'stream' | 'json',
+  retries: number = AXIOS_MAX_RETRIES
+): Promise<any> {
+  try {
+    return await axios({
+      url,
+      responseType,
+      timeout: AXIOS_TIMEOUT_MS,
+    });
+  } catch (error) {
+    if (retries > 0) {
+      const isRetryable = axios.isAxiosError(error) && (
+        error.code === 'ECONNABORTED' ||
+        error.code === 'ETIMEDOUT' ||
+        error.code === 'ECONNRESET' ||
+        error.code === 'ENOTFOUND' ||
+        error.message.includes('timeout')
+      );
+      
+      if (isRetryable || error instanceof AggregateError) {
+        console.warn(`axios request failed, retrying... (${retries} retries left). Error: ${error}`);
+        await new Promise(resolve => setTimeout(resolve, 1000)); // Wait 1 second before retry
+        return axiosWithRetry(url, responseType, retries - 1);
+      }
+    }
+    throw error;
+  }
+}
+
 export async function saveMessagesToDatabase(ctx: MyContext, messages: MyMessage[]) {
   console.log(formatLogMessage(ctx, `Saving ${messages.length} messages to the database`));
 
@@ -47,6 +82,17 @@ export async function saveMessagesToDatabase(ctx: MyContext, messages: MyMessage
   }
 }
 
+function formatErrorDetails(e: Error | any): string {
+  if (e instanceof AggregateError) {
+    const errorMessages = e.errors.map((err: Error, i: number) => `  [${i}] ${err.name}: ${err.message}`).join('\n');
+    return `AggregateError with ${e.errors.length} errors:\n${errorMessages}`;
+  }
+  if (e instanceof Error) {
+    return `${e.name}: ${e.message}${e.stack ? `\nStack: ${e.stack}` : ''}`;
+  }
+  return String(e);
+}
+
 export async function handleErrorMessage(ctx: MyContext, e: Error | any) {
   if (e instanceof NoOpenAiApiKeyError) {
     console.warn(formatLogMessage(ctx, `[WARN] error occurred: ${e}`));
@@ -56,7 +102,7 @@ export async function handleErrorMessage(ctx: MyContext, e: Error | any) {
     }
     await reply(ctx, messageToUser, 'error occurred');
   } else {
-    console.error(formatLogMessage(ctx, `[ERROR] error occurred: ${e}`));
+    console.error(formatLogMessage(ctx, `[ERROR] error occurred: ${formatErrorDetails(e)}`));
     await reply(ctx, ERROR_MESSAGE, 'error occurred');
   }
   return;
@@ -207,9 +253,9 @@ async function handleAudioFileCore(ctx: MyContext, fileId: string, mimeType: str
     }
     const inputFilePath = `./temp/${fileId}.${extension}`;
 
-    // Download the file
+    // Download the file with timeout and retries
     const url = await ctx.telegram.getFileLink(fileId);
-    const response = await axios({ url: url.toString(), responseType: 'stream' });
+    const response = await axiosWithRetry(url.toString(), 'stream');
     await new Promise((resolve, reject) => {
       response.data.pipe(fs.createWriteStream(inputFilePath))
         .on('error', reject)
@@ -329,9 +375,9 @@ export async function handlePhotoMessage(ctx: MyContext): Promise<string> {
         fs.mkdirSync('./temp');
       }
 
-      // Get file URL and download
+      // Get file URL and download with timeout and retries
       const url = await ctx.telegram.getFileLink(fileId);
-      const response = await axios({ url: url.toString(), responseType: 'stream' });
+      const response = await axiosWithRetry(url.toString(), 'stream');
 
       // Save the file
       await new Promise((resolve, reject) => {
