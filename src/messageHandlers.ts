@@ -60,7 +60,7 @@ async function axiosWithRetry(
         error.message.includes('timeout')
       );
       
-      if (isRetryable || error instanceof AggregateError) {
+      if (isRetryable) {
         console.warn(`axios request failed, retrying... (${retries} retries left). Error: ${error}`);
         await new Promise(resolve => setTimeout(resolve, 1000)); // Wait 1 second before retry
         return axiosWithRetry(url, responseType, retries - 1);
