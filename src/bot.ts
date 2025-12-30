@@ -13,6 +13,37 @@ async function sleep(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
+interface FetchErrorLike {
+  message?: string;
+  code?: string;
+  errno?: string;
+  type?: string;
+  cause?: unknown;
+}
+
+function getErrorDetails(error: unknown): string {
+  if (error instanceof Error) {
+    const fetchError = error as FetchErrorLike;
+    const parts: string[] = [error.message];
+    
+    if (fetchError.code) {
+      parts.push(`code: ${fetchError.code}`);
+    }
+    if (fetchError.errno) {
+      parts.push(`errno: ${fetchError.errno}`);
+    }
+    if (fetchError.type) {
+      parts.push(`type: ${fetchError.type}`);
+    }
+    if (fetchError.cause) {
+      parts.push(`cause: ${JSON.stringify(fetchError.cause)}`);
+    }
+    
+    return parts.join(' | ');
+  }
+  return String(error);
+}
+
 async function connectToTelegram(bot: Telegraf<MyContext>): Promise<void> {
   for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
     try {
@@ -21,8 +52,9 @@ async function connectToTelegram(bot: Telegraf<MyContext>): Promise<void> {
       bot.context.botUsername = botInfo.username;
       console.log(`Connected to Telegram as @${botInfo.username}`);
       return;
-    } catch (error) {
-      console.error(`Connection attempt ${attempt} failed:`, error instanceof Error ? error.message : error);
+    } catch (error: unknown) {
+      const errorDetails = getErrorDetails(error);
+      console.error(`Connection attempt ${attempt} failed:`, errorDetails);
       if (attempt < MAX_RETRIES) {
         console.log(`Retrying in ${RETRY_DELAY_MS / 1000} seconds...`);
         await sleep(RETRY_DELAY_MS);
