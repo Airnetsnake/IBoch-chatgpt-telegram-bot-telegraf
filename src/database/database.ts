@@ -12,6 +12,12 @@ const pool = new Pool({
     rejectUnauthorized: false
   }
 });
+
+// Handle unexpected pool errors to prevent silent failures
+pool.on('error', (err) => {
+  console.error('[ERROR] Unexpected PostgreSQL pool error:', err);
+});
+
 export { pool }; 
 
 export const getUserUsedTokens = async (user_id: number): Promise<number> => {

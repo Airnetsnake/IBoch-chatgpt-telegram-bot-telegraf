@@ -15,6 +15,16 @@ bot.telegram.getMe().then((botInfo) => {
   bot!.context.botUsername = botInfo.username; // Store the bot username in context
 });
 
+// Global error handler for unhandled bot errors
+bot.catch((err, ctx) => {
+  console.error(`[ERROR] Bot error for ${ctx.updateType}:`, err);
+});
+
+// Global handler for unhandled promise rejections
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('[ERROR] Unhandled Rejection at:', promise, 'reason:', reason);
+});
+
 async function clearPendingUpdates() {
   try {
     const response = await axios.get(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/getUpdates`);
