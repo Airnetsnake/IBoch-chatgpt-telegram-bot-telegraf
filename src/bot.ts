@@ -6,14 +6,36 @@ import { initializeBotHandlers } from './botHandlers';
 import express from "express";
 import axios from 'axios';
 
+const RETRY_DELAY_MS = 5000;
+const MAX_RETRIES = 10;
+
+async function sleep(ms: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+async function connectToTelegram(bot: Telegraf<MyContext>): Promise<void> {
+  for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+    try {
+      console.log(`Connecting to Telegram API (attempt ${attempt}/${MAX_RETRIES})...`);
+      const botInfo = await bot.telegram.getMe();
+      bot.context.botUsername = botInfo.username;
+      console.log(`Connected to Telegram as @${botInfo.username}`);
+      return;
+    } catch (error) {
+      console.error(`Connection attempt ${attempt} failed:`, error instanceof Error ? error.message : error);
+      if (attempt < MAX_RETRIES) {
+        console.log(`Retrying in ${RETRY_DELAY_MS / 1000} seconds...`);
+        await sleep(RETRY_DELAY_MS);
+      }
+    }
+  }
+  throw new Error(`Failed to connect to Telegram API after ${MAX_RETRIES} attempts`);
+}
+
 let bot: Telegraf<MyContext> | undefined;
 
 // Telegram bot
 bot = new Telegraf<MyContext>(TELEGRAM_BOT_TOKEN, { handlerTimeout: CHAT_GPT_DEFAULT_TIMEOUT_MS * 6 });
-
-bot.telegram.getMe().then((botInfo) => {
-  bot!.context.botUsername = botInfo.username; // Store the bot username in context
-});
 
 // Global error handler for unhandled bot errors
 bot.catch((err, ctx) => {
@@ -57,26 +79,27 @@ bot.use(async (ctx: MyContext, next) => {
 initializeBotHandlers(bot);
 
 const startBot = async () => {
+  // Start health check server first so Railway sees the service as healthy
+  const app = express();
+  app.get("/health", (req, res) => {
+    res.send("OK");
+  });
+  const PORT = process.env.PORT || 8080;
+  app.listen(PORT, () => {
+    console.log(`Health check server running on port ${PORT}`);
+  });
+
   await setupDatabase();
   console.log('Database initialization complete. Starting bot...');
+
+  // Connect to Telegram with retry logic
+  await connectToTelegram(bot!);
 
   // DEBUG: Needed in case the bot was stopped while there were pending updates
   // await clearPendingUpdates();
 
   bot!.launch();
   console.log('Bot started');
-
-  // Create an Express server for health check
-  const app = express();
-
-  app.get("/health", (req, res) => {
-    res.send("OK");
-  });
-
-  const PORT = process.env.PORT || 8080;
-  app.listen(PORT, () => {
-    console.log(`Health check server running on port ${PORT}`);
-  });
 };
 
 startBot().catch(err => {
